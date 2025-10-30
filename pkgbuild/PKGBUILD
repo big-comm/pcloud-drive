@@ -15,47 +15,101 @@ options=(!strip !debug)
 install="${pkgname}.install"
 replaces=('pcloud-git' 'pcloud')
 _shortname='pcloud'
-_appimage="${pkgname}-${pkgver}-${pkgrel}.AppImage"
-_api_code='XZbJvD5ZfXtwygX5xg7F9ywtRup5H5sBvfhy'
-_api_response="$(curl -s "https://api.pcloud.com/getpublinkdownload?code=${_api_code}")"
-_dlhost="$(echo ${_api_response} | grep -E -o '[a-zA-Z0-9\\-]+\\.pcloud\\.com' | head -n 2 | sort -R | head -n 1)"
-_dlpath="$(echo ${_api_response} | grep -E -o "\\\"path\\\":\\s{0,1}\\\".+\\\"" | cut -d '"' -f 4 | tr -d '\\\\')"
+
 source=('LICENSE'
-        "${_appimage}::https://${_dlhost}${_dlpath}")
+        "https://partner.pcloud.com/dl/linux")
+        
 sha256sums=('9dce0249569d9dc9f00217009880458cf669a657ebb6604b4e52be4e875f1a42'
             'SKIP')
 
 prepare() {
-    chmod +x "${_appimage}"
-    "./${_appimage}" --appimage-extract
+    # Rename downloaded file to proper name
+    if [ -f "linux" ]; then
+        mv linux pcloud.AppImage
+    fi
+    
+    # Make AppImage executable
+    chmod +x pcloud.AppImage
+    
+    # Extract AppImage contents
+    ./pcloud.AppImage --appimage-extract >/dev/null 2>&1 || {
+        echo "Failed to extract AppImage, trying alternative method..."
+        # Alternative extraction method if the first fails
+        python3 -c "
+import subprocess
+import sys
+try:
+    subprocess.run(['./pcloud.AppImage', '--appimage-extract'], check=True, capture_output=True)
+except:
+    sys.exit(1)
+"
+    }
 }
 
 package() {
     cd "${srcdir}"
 
-    # Create Directories
-    install -d "${pkgdir}/usr/bin"
+    # Create necessary directories
+    install -dm755 "${pkgdir}/opt/${_shortname}"
+    install -dm755 "${pkgdir}/usr/bin"
+    install -dm755 "${pkgdir}/usr/share/applications"
     install -dm755 "${pkgdir}/usr/share/icons/hicolor"
+    install -dm755 "${pkgdir}/usr/share/licenses/${pkgname}"
 
     # Install AppImage
-    install -Dm755 "${_appimage}" "${pkgdir}/opt/${_shortname}/${pkgname}.AppImage"
+    install -Dm755 pcloud.AppImage "${pkgdir}/opt/${_shortname}/${pkgname}.AppImage"
 
     # Install License
     install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 
-    # Install Icons, Desktop Shortcut
-    find squashfs-root -type d -exec chmod 0755 {} \;
-    cp -r squashfs-root/usr/share/icons/hicolor "${pkgdir}/usr/share/icons/"
+    # Install Icons with error handling
+    if [ -d "squashfs-root/usr/share/icons/hicolor" ]; then
+        find squashfs-root/usr/share/icons/hicolor -type f -name "*.png" -o -name "*.svg" | while read icon; do
+            rel_path=${icon#squashfs-root/usr/share/icons/hicolor/}
+            dir_path=$(dirname "$rel_path")
+            install -dm755 "${pkgdir}/usr/share/icons/hicolor/${dir_path}"
+            install -Dm644 "$icon" "${pkgdir}/usr/share/icons/hicolor/${rel_path}"
+        done
+    fi
 
-    # Update desktop file entries
-    sed -i -E "s|Exec=AppRun|Exec=env DESKTOPINTEGRATION=false /usr/bin/${_shortname}|" \
-        "squashfs-root/${_shortname}.desktop"
-    sed -i "s/Name=pcloud/Name=pCloud/" "squashfs-root/${_shortname}.desktop"
+    # Install desktop file with error handling
+    desktop_file=""
+    for file in "squashfs-root/${_shortname}.desktop" "squashfs-root/usr/share/applications/${_shortname}.desktop"; do
+        if [ -f "$file" ]; then
+            desktop_file="$file"
+            break
+        fi
+    done
+    
+    if [ -n "$desktop_file" ]; then
+        # Update desktop file entries
+        sed -i -E "s|Exec=AppRun.*|Exec=env DESKTOPINTEGRATION=false /usr/bin/${_shortname}|" \
+            "$desktop_file"
+        sed -i "s/Name=pcloud/Name=pCloud/" "$desktop_file"
+        
+        # Install desktop file
+        install -Dm644 "$desktop_file" "${pkgdir}/usr/share/applications/${_shortname}.desktop"
+    else
+        # Create minimal desktop file if none found
+        cat > "${pkgdir}/usr/share/applications/${_shortname}.desktop" << 'EOF'
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=pCloud
+Comment=pCloud Drive - Sync your files
+Exec=env DESKTOPINTEGRATION=false /usr/bin/pcloud
+Icon=pcloud
+StartupNotify=true
+Categories=Network;FileTransfer;
+MimeType=x-scheme-handler/pcloud;
+EOF
+    fi
 
-    # Install desktop file
-    install -Dm644 "squashfs-root/${_shortname}.desktop" -t "${pkgdir}/usr/share/applications/"
-
-    # Symlink AppImage
-    ln -sf "/opt/${_shortname}/${pkgname}.AppImage" "${pkgdir}/usr/bin/${_shortname}"
+    # Create wrapper script
+    cat > "${pkgdir}/usr/bin/${_shortname}" << 'EOF'
+#!/bin/bash
+exec /opt/pcloud/pcloud-drive.AppImage "$@"
+EOF
+    chmod +x "${pkgdir}/usr/bin/${_shortname}"
 }
 
