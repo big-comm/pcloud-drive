@@ -21,20 +21,67 @@ source=('https://partner.pcloud.com/dl/linux')
 sha256sums=('SKIP')
 
 prepare() {
+    echo "==> Starting AppImage extraction..."
+    
     # Rename downloaded file to proper AppImage name
     if [ -f "linux" ]; then
+        echo "==> Renaming linux to pcloud.AppImage"
         mv linux pcloud.AppImage
+    else
+        echo "==> ERROR: linux file not found!"
+        ls -la
+        return 1
     fi
     
     # Make AppImage executable
+    echo "==> Making AppImage executable"
     chmod +x pcloud.AppImage
     
+    # Verify AppImage is valid
+    if ! file pcloud.AppImage | grep -q "ELF\|ISO"; then
+        echo "==> ERROR: Downloaded file is not a valid AppImage!"
+        file pcloud.AppImage
+        return 1
+    fi
+    
     # Extract AppImage contents
-    ./pcloud.AppImage --appimage-extract >/dev/null 2>&1
+    echo "==> Extracting AppImage contents"
+    if ! ./pcloud.AppImage --appimage-extract; then
+        echo "==> ERROR: Failed to extract AppImage with --appimage-extract"
+        echo "==> Attempting alternative extraction method..."
+        
+        # Alternative: try using unsquashfs if available
+        if command -v unsquashfs &> /dev/null; then
+            echo "==> Using unsquashfs for extraction"
+            # AppImage is essentially a squashfs filesystem, try mounting/extracting
+            unsquashfs -d squashfs-root pcloud.AppImage || {
+                echo "==> ERROR: unsquashfs also failed"
+                return 1
+            }
+        else
+            echo "==> ERROR: unsquashfs not available"
+            return 1
+        fi
+    fi
+    
+    # Verify extraction
+    if [ ! -d "squashfs-root" ]; then
+        echo "==> ERROR: squashfs-root directory not created after extraction!"
+        return 1
+    fi
+    
+    echo "==> Extraction successful"
+    ls -la squashfs-root/ | head -20
 }
 
 package() {
     cd "${srcdir}"
+
+    # Verify extraction was successful
+    if [ ! -d "squashfs-root" ]; then
+        echo "==> ERROR: squashfs-root not found in package()"
+        return 1
+    fi
 
     # Create necessary directories
     install -dm755 "${pkgdir}/opt/${_shortname}"
@@ -46,7 +93,7 @@ package() {
     # Install AppImage to /opt
     install -Dm755 pcloud.AppImage "${pkgdir}/opt/${_shortname}/${pkgname}.AppImage"
 
-    # Install License from AppImage
+    # Install Licenses from AppImage
     if [ -f "squashfs-root/LICENSE.electron.txt" ]; then
         install -Dm644 "squashfs-root/LICENSE.electron.txt" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.electron.txt"
     fi
@@ -60,15 +107,20 @@ package() {
         # Update Exec line to use our wrapper script
         sed -i 's|^Exec=.*|Exec=/usr/bin/pcloud|' "squashfs-root/pcloud.desktop"
         install -Dm644 "squashfs-root/pcloud.desktop" "${pkgdir}/usr/share/applications/pcloud.desktop"
+    else
+        echo "==> WARNING: pcloud.desktop not found in AppImage root"
     fi
 
     # Install main icon from root
     if [ -f "squashfs-root/pcloud.png" ]; then
         install -Dm644 "squashfs-root/pcloud.png" "${pkgdir}/usr/share/icons/pcloud.png"
+    else
+        echo "==> WARNING: pcloud.png not found in AppImage root"
     fi
 
-    # Install icons from hicolor (via symlink in AppImage)
+    # Install icons from hicolor
     if [ -d "squashfs-root/usr/share/icons/hicolor" ]; then
+        echo "==> Installing hicolor icons"
         cp -r squashfs-root/usr/share/icons/hicolor/* "${pkgdir}/usr/share/icons/hicolor/" 2>/dev/null || true
     fi
 
@@ -78,4 +130,6 @@ package() {
 exec /opt/pcloud/pcloud-drive.AppImage "$@"
 EOF
     chmod +x "${pkgdir}/usr/bin/${_shortname}"
+    
+    echo "==> Package installation completed successfully"
 }
