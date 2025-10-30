@@ -21,92 +21,32 @@ replaces=('pcloud-git' 'pcloud')
 _shortname='pcloud'
 _appimage="${pkgname}-${pkgver}.AppImage"
 
-# NOTA: A API da pCloud é usada para obter o link de download dinamicamente.
-# Se o build falhar, verifique primeiro se a resposta da API mudou.
-prepare() {
-    local _api_code='XZbJvD5ZfXtwygX5xg7F9ywtRup5H5sBvfhy'
-    
-    echo "==> Obtendo URL de download da API do pCloud..."
-    # Faz a chamada à API e armazena a resposta
-    local _api_response
-    _api_response="$(curl -s "https://api.pcloud.com/getpublinkdownload?code=${_api_code}")"
+# GERAÇÃO URL DINÂMICA
+_api_code='XZbJvD5ZfXtwygX5xg7F9ywtRup5H5sBvfhy'
+echo "==> Obtendo URL de download da API do pCloud..."
+_api_response="$(curl -s "https://api.pcloud.com/getpublinkdownload?code=${_api_code}")"
 
-    # Verifica se a chamada à API foi bem-sucedida e retornou um JSON válido
-    if ! echo "${_api_response}" | jq -e . >/dev/null 2>&1; then
-        echo "==> ERRO: A resposta da API do pCloud não é um JSON válido ou a requisição falhou."
-        echo "==> Resposta recebida: ${_api_response}"
-        return 1
-    fi
+# Usa jq para extrair o host e o caminho de forma segura
+_dlhost=$(echo "${_api_response}" | jq -r '.hosts[0]')
+_dlpath=$(echo "${_api_response}" | jq -r '.path')
 
-    # Usa 'jq' para extrair o host e o caminho de forma segura e robusta
-    local _dlhost
-    _dlhost=$(echo "${_api_response}" | jq -r '.hosts[0]')
-    local _dlpath
-    _dlpath=$(echo "${_api_response}" | jq -r '.path')
+# Verifica se a extração da URL foi bem-sucedida
+if [[ -z "${_dlhost}" || -z "${_dlpath}" ]]; then
+  # A função error() é do makepkg e encerra o build de forma limpa
+  error "Falha ao obter a URL de download da API do pCloud. Resposta recebida: ${_api_response}"
+fi
+# --- FIM DA GERAÇÃO DE URL ---
 
-    # Verifica se o host e o caminho foram extraídos corretamente
-    if [[ -z "${_dlhost}" || -z "${_dlpath}" ]]; then
-        echo "==> ERRO: Não foi possível extrair 'host' ou 'path' da resposta da API."
-        echo "==> Resposta JSON: ${_api_response}"
-        return 1
-    fi
-
-    # Constrói a URL final e a adiciona à lista de fontes (source)
-    # Esta é uma forma mais limpa de lidar com fontes dinâmicas
-    source=("${_appimage}::https://${_dlhost}${_dlpath}")
-    
-    # É crucial gerar o checksum correto. Por enquanto, deixamos SKIP para o primeiro download.
-    # Depois de baixar, gere o checksum com 'updpkgsums' e substitua 'SKIP'.
-    sha256sums=('SKIP')
-    
-    # Baixa o arquivo
-    echo "==> Baixando o AppImage de: https://${_dlhost}${_dlpath}"
-    msg2 "Baixando fontes..."
-    download
-}
-
-build() {
-    cd "${srcdir}"
-    
-    echo "==> Iniciando extração do AppImage..."
-    echo "==> Arquivo baixado: ${_appimage}"
-    
-    # Torna o AppImage executável
-    chmod +x "${_appimage}"
-    
-    # Verifica se o arquivo baixado é um executável ELF (formato do AppImage)
-    if ! file "${_appimage}" | grep -q "ELF"; then
-        echo "==> ERRO: O arquivo baixado não é um AppImage válido (não é um ELF)!"
-        echo "==> Tipo do arquivo:"
-        file "${_appimage}"
-        echo "==> Tamanho do arquivo:"
-        ls -lh "${_appimage}"
-        return 1
-    fi
-    
-    # Extrai o conteúdo do AppImage. Removemos o redirecionamento para /dev/null
-    # para que possamos ver os erros de extração, se houver.
-    echo "==> Extraindo conteúdo do AppImage..."
-    if ! ./"${_appimage}" --appimage-extract; then
-        echo "==> ERRO: Falha ao extrair o AppImage."
-        return 1
-    fi
-    
-    # Verifica se a extração foi bem-sucedida
-    if [ ! -d "squashfs-root" ]; then
-        echo "==> ERRO: O diretório squashfs-root não foi criado!"
-        return 1
-    fi
-    
-    echo "==> Extração concluída com sucesso."
-}
+#SOURCE OBTIDA
+source=("${_appimage}::https://${_dlhost}${_dlpath}")
+sha256sums=('SKIP')
 
 package() {
     cd "${srcdir}"
 
     # Verifica se a extração foi bem-sucedida antes de empacotar
     if [ ! -d "squashfs-root" ]; then
-        echo "==> ERRO: Diretório squashfs-root não encontrado na função package()."
+        error "Diretório squashfs-root não encontrado na função package()."
         return 1
     fi
 
