@@ -1,82 +1,104 @@
 #!/usr/bin/env bash
+
 # This file contains scripts that are executed at different stages of package installation/upgrade/removal
 
 # Color definitions for status messages
-blueDark="\e[1;38;5;33m"     # Bold dark blue
-mediumBlue="\e[1;38;5;32m"   # Bold medium blue
-lightBlue="\e[1;38;5;39m"    # Bold light blue
-cyan="\e[1;38;5;45m"         # Bold cyan
-white="\e[1;97m"             # Bold white
-reset="\e[0m"                # Reset text formatting
 
-# Print status messages - CHANGE 'PACKAGE_NAME' to your actual package name
+blueDark="\e[1;38;5;33m" # Bold dark blue
+
+mediumBlue="\e[1;38;5;32m" # Bold medium blue
+
+lightBlue="\e[1;38;5;39m" # Bold light blue
+
+cyan="\e[1;38;5;45m" # Bold cyan
+
+white="\e[1;97m" # Bold white
+
+reset="\e[0m" # Reset text formatting
+
+# Print status messages
+
 printMsg() {
-    local message=$1
-    echo -e "${blueDark}[${lightBlue}PACKAGE_NAME${blueDark}]${reset} ${cyan}→${reset} ${white}${message}${reset}"
+
+local message=$1
+
+echo -e "${blueDark}[${lightBlue}pcloud-drive${blueDark}]${reset} ${cyan}→${reset} ${white}${message}${reset}"
+
 }
 
-# Function executed before package installation
-# pre_install() {
-#     printMsg "Preparing to install the package..."
-#     # Example: Check for system dependencies
-#     # if ! command -v required_command &> /dev/null; then
-#     #     printMsg "Error: required_command not found. Please install it before continuing."
-#     #     exit 1
-#     # fi
-# }
 
 # Function executed after package installation
-# post_install() {
-#     printMsg "Configuring the package after installation..."
-#     # Example: Create a configuration directory
-#     # mkdir -p /etc/mypackage
-#     # chmod 755 /etc/mypackage
-#     # printMsg "Created configuration directory"
-#
-#     # Example: Start a service
-#     # systemctl enable myservice.service
-#     # systemctl start myservice.service
-#     # printMsg "Service enabled and started"
-# }
 
-# Function executed before package upgrade
-# pre_upgrade() {
-#     printMsg "Preparing to upgrade the package..."
-#     # Example: Backup configuration files
-#     # cp /etc/mypackage/config.conf /etc/mypackage/config.conf.bak
-#     # printMsg "Configuration backup created"
-# }
+post_install() {
+
+printMsg "Configuring pCloud Drive after installation..."
+
+# Update desktop database to register the application
+
+update-desktop-database -q 2>/dev/null || true
+
+# Update icon cache for proper icon display
+
+gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
+
+printMsg "Desktop integration configured successfully"
+
+printMsg "You can now launch pCloud Drive from your applications menu or run 'pcloud' in terminal"
+
+}
+
 
 # Function executed after package upgrade
-# post_upgrade() {
-#     printMsg "Finalizing package upgrade..."
-#     # Usually, post_install is called here to ensure
-#     # all post-installation configurations are applied
-#     # post_install
-#
-#     # Example: Check and update configuration files
-#     # if [ -f /etc/mypackage/config.conf.pacnew ]; then
-#     #     printMsg "New configuration file available. Please review /etc/mypackage/config.conf.pacnew"
-#     # fi
-#     # printMsg "Upgrade completed successfully"
-# }
+
+post_upgrade() {
+
+printMsg "Finalizing package upgrade..."
+
+# Ensure desktop entries and icons are properly updated after upgrade
+
+post_install
+
+printMsg "Upgrade completed successfully"
+
+}
+
 
 # Function executed before package removal
-# pre_remove() {
-#     printMsg "Preparing to remove the package..."
-#     # Example: Stop services
-#     # systemctl stop myservice.service
-#     # systemctl disable myservice.service
-#     # printMsg "Services stopped"
-# }
+
+pre_remove() {
+
+printMsg "Preparing to remove the package..."
+
+# Stop any running pcloud processes gracefully
+
+pkill -f pcloud 2>/dev/null || true
+
+printMsg "Stopped running pCloud processes"
+
+}
+
 
 # Function executed after package removal
-# post_remove() {
-#     printMsg "Cleaning up after package removal..."
-#     # Example: Remove data directories created by the package
-#     # rm -rf /var/lib/mypackage
-#     # printMsg "Package directories removed"
-#
-#     # printMsg "If you want to remove all user data, run:"
-#     # printMsg "rm -rf /home/*/mypackage_data"
-# }
+
+post_remove() {
+
+printMsg "Cleaning up after package removal..."
+
+# Update desktop database to remove application entries
+
+update-desktop-database -q 2>/dev/null || true
+
+# Update icon cache after removal
+
+gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
+
+# Remove any remaining configuration directories if they exist and are empty
+
+if [ -d "$HOME/.pcloud" ] && [ -z "$(ls -A $HOME/.pcloud 2>/dev/null)" ]; then
+    rmdir "$HOME/.pcloud" 2>/dev/null || true
+fi
+
+printMsg "Package cleanup completed"
+
+}
+
