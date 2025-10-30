@@ -16,82 +16,46 @@ install="pkgbuild.install"
 replaces=('pcloud-git' 'pcloud')
 
 _shortname='pcloud'
-source=('https://partner.pcloud.com/dl/linux')
+_appimage="${pkgname}-${pkgver}.AppImage"
 
+# Use pCloud's public API to get the download link dynamically
+_api_code='XZbJvD5ZfXtwygX5xg7F9ywtRup5H5sBvfhy'
+_api_response="$(curl -s "https://api.pcloud.com/getpublinkdownload?code=${_api_code}")"
+_dlhost="$(echo ${_api_response} | grep -E -o '[a-zA-Z0-9\\-]+\\.pcloud\\.com' | head -n 2 | sort -R | head -n 1)"
+_dlpath="$(echo ${_api_response} | grep -E -o "\\\"path\\\":\\s{0,1}\\\".+\\\"" | cut -d '"' -f 4 | tr -d '\\\\')"
+
+source=("${_appimage}::https://${_dlhost}${_dlpath}")
 sha256sums=('SKIP')
 
 prepare() {
     echo "==> Starting AppImage extraction..."
-    
-    # Handle the downloaded file (might be symlink or regular file)
-    local appimage_file=""
-    
-    if [ -f "linux" ]; then
-        echo "==> Found 'linux' file"
-        # Resolve symlink if it's one
-        appimage_file=$(readlink -f "linux")
-        echo "==> Resolved to: $appimage_file"
-        
-        # Copy it to a proper name if needed
-        if [ "$appimage_file" != "$(pwd)/pcloud.AppImage" ]; then
-            echo "==> Copying to pcloud.AppImage"
-            cp -f "$appimage_file" pcloud.AppImage
-        else
-            echo "==> Renaming linux to pcloud.AppImage"
-            mv linux pcloud.AppImage
-        fi
-    else
-        echo "==> ERROR: linux file not found!"
-        ls -la
-        return 1
-    fi
+    echo "==> Downloaded file: ${_appimage}"
     
     # Make AppImage executable
-    echo "==> Making AppImage executable"
-    chmod +x pcloud.AppImage
+    chmod +x "${_appimage}"
     
-    # Verify AppImage exists and is regular file
-    if [ ! -f "pcloud.AppImage" ] || [ -L "pcloud.AppImage" ]; then
-        echo "==> ERROR: pcloud.AppImage is not a regular file!"
-        file pcloud.AppImage || true
-        ls -la pcloud.AppImage || true
+    # Verify we have a valid AppImage
+    if ! file "${_appimage}" | grep -q "ELF"; then
+        echo "==> ERROR: Downloaded file is not a valid AppImage!"
+        echo "==> File type:"
+        file "${_appimage}"
+        echo "==> File size:"
+        ls -lh "${_appimage}"
+        echo "==> First few bytes:"
+        head -c 100 "${_appimage}"
         return 1
     fi
-    
-    echo "==> pcloud.AppImage info:"
-    file pcloud.AppImage
-    ls -lh pcloud.AppImage
     
     # Extract AppImage contents
     echo "==> Extracting AppImage contents"
-    if ! ./pcloud.AppImage --appimage-extract; then
-        echo "==> ERROR: Failed to extract AppImage with --appimage-extract"
-        echo "==> Attempting alternative extraction method..."
-        
-        # Alternative: try using unsquashfs if available
-        if command -v unsquashfs &> /dev/null; then
-            echo "==> Using unsquashfs for extraction"
-            unsquashfs -d squashfs-root pcloud.AppImage || {
-                echo "==> ERROR: unsquashfs also failed"
-                return 1
-            }
-        else
-            echo "==> ERROR: unsquashfs not available, trying 7z..."
-            if command -v 7z &> /dev/null; then
-                7z x -osquashfs-root pcloud.AppImage || {
-                    echo "==> ERROR: 7z also failed"
-                    return 1
-                }
-            else
-                echo "==> ERROR: No extraction tools available"
-                return 1
-            fi
-        fi
+    if ! ./"${_appimage}" --appimage-extract >/dev/null 2>&1; then
+        echo "==> ERROR: Failed to extract AppImage"
+        return 1
     fi
     
     # Verify extraction
     if [ ! -d "squashfs-root" ]; then
-        echo "==> ERROR: squashfs-root directory not created after extraction!"
+        echo "==> ERROR: squashfs-root directory not created!"
         return 1
     fi
     
@@ -116,7 +80,7 @@ package() {
     install -dm755 "${pkgdir}/usr/share/licenses/${pkgname}"
 
     # Install AppImage to /opt
-    install -Dm755 pcloud.AppImage "${pkgdir}/opt/${_shortname}/${pkgname}.AppImage"
+    install -Dm755 "${_appimage}" "${pkgdir}/opt/${_shortname}/${pkgname}.AppImage"
 
     # Install Licenses from AppImage
     if [ -f "squashfs-root/LICENSE.electron.txt" ]; then
@@ -127,29 +91,24 @@ package() {
         install -Dm644 "squashfs-root/LICENSES.chromium.html" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSES.chromium.html"
     fi
 
-    # Install desktop file - it's at the root of squashfs-root
+    # Install desktop file
     if [ -f "squashfs-root/pcloud.desktop" ]; then
         # Update Exec line to use our wrapper script
         sed -i 's|^Exec=.*|Exec=/usr/bin/pcloud|' "squashfs-root/pcloud.desktop"
         install -Dm644 "squashfs-root/pcloud.desktop" "${pkgdir}/usr/share/applications/pcloud.desktop"
-    else
-        echo "==> WARNING: pcloud.desktop not found in AppImage root"
     fi
 
-    # Install main icon from root
+    # Install main icon
     if [ -f "squashfs-root/pcloud.png" ]; then
         install -Dm644 "squashfs-root/pcloud.png" "${pkgdir}/usr/share/icons/pcloud.png"
-    else
-        echo "==> WARNING: pcloud.png not found in AppImage root"
     fi
 
-    # Install icons from hicolor
+    # Install hicolor icons
     if [ -d "squashfs-root/usr/share/icons/hicolor" ]; then
-        echo "==> Installing hicolor icons"
         cp -r squashfs-root/usr/share/icons/hicolor/* "${pkgdir}/usr/share/icons/hicolor/" 2>/dev/null || true
     fi
 
-    # Create wrapper script that runs the AppImage
+    # Create wrapper script
     cat > "${pkgdir}/usr/bin/${_shortname}" << 'EOF'
 #!/bin/bash
 exec /opt/pcloud/pcloud-drive.AppImage "$@"
