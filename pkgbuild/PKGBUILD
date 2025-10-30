@@ -14,8 +14,8 @@ makedepends=('jq')
 depends=('fuse2' 'zlib' 'hicolor-icon-theme')
 optdepends=('libappindicator-gtk3: Tray menu support')
 options=(!strip !debug)
-# Usando a convenção padrão para o nome do arquivo .install
-install="${pkgname}.install"
+# Usando a convenção padrão do BigLinux
+install="pkgbuild.install"
 replaces=('pcloud-git' 'pcloud')
 
 _shortname='pcloud'
