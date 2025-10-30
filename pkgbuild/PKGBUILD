@@ -9,111 +9,134 @@ pkgdesc='pCloud drive. Electron edition.'
 arch=('x86_64')
 url='https://www.pcloud.com/'
 license=("LicenseRef-${pkgname}")
+# Adicionado 'jq' como dependência de compilação para analisar a resposta da API de forma segura
+makedepends=('jq')
 depends=('fuse2' 'zlib' 'hicolor-icon-theme')
 optdepends=('libappindicator-gtk3: Tray menu support')
 options=(!strip !debug)
-install="pkgbuild.install"
+# Usando a convenção padrão para o nome do arquivo .install
+install="${pkgname}.install"
 replaces=('pcloud-git' 'pcloud')
 
 _shortname='pcloud'
 _appimage="${pkgname}-${pkgver}.AppImage"
 
-# Use pCloud's public API to get the download link dynamically
-_api_code='XZbJvD5ZfXtwygX5xg7F9ywtRup5H5sBvfhy'
-_api_response="$(curl -s "https://api.pcloud.com/getpublinkdownload?code=${_api_code}")"
-_dlhost="$(echo ${_api_response} | grep -E -o '[a-zA-Z0-9\\-]+\\.pcloud\\.com' | head -n 2 | sort -R | head -n 1)"
-_dlpath="$(echo ${_api_response} | grep -E -o "\\\"path\\\":\\s{0,1}\\\".+\\\"" | cut -d '"' -f 4 | tr -d '\\\\')"
-
-source=("${_appimage}::https://${_dlhost}${_dlpath}")
-sha256sums=('SKIP')
-
+# NOTA: A API da pCloud é usada para obter o link de download dinamicamente.
+# Se o build falhar, verifique primeiro se a resposta da API mudou.
 prepare() {
-    echo "==> Starting AppImage extraction..."
-    echo "==> Downloaded file: ${_appimage}"
+    local _api_code='XZbJvD5ZfXtwygX5xg7F9ywtRup5H5sBvfhy'
     
-    # Make AppImage executable
+    echo "==> Obtendo URL de download da API do pCloud..."
+    # Faz a chamada à API e armazena a resposta
+    local _api_response
+    _api_response="$(curl -s "https://api.pcloud.com/getpublinkdownload?code=${_api_code}")"
+
+    # Verifica se a chamada à API foi bem-sucedida e retornou um JSON válido
+    if ! echo "${_api_response}" | jq -e . >/dev/null 2>&1; then
+        echo "==> ERRO: A resposta da API do pCloud não é um JSON válido ou a requisição falhou."
+        echo "==> Resposta recebida: ${_api_response}"
+        return 1
+    fi
+
+    # Usa 'jq' para extrair o host e o caminho de forma segura e robusta
+    local _dlhost
+    _dlhost=$(echo "${_api_response}" | jq -r '.hosts[0]')
+    local _dlpath
+    _dlpath=$(echo "${_api_response}" | jq -r '.path')
+
+    # Verifica se o host e o caminho foram extraídos corretamente
+    if [[ -z "${_dlhost}" || -z "${_dlpath}" ]]; then
+        echo "==> ERRO: Não foi possível extrair 'host' ou 'path' da resposta da API."
+        echo "==> Resposta JSON: ${_api_response}"
+        return 1
+    fi
+
+    # Constrói a URL final e a adiciona à lista de fontes (source)
+    # Esta é uma forma mais limpa de lidar com fontes dinâmicas
+    source=("${_appimage}::https://${_dlhost}${_dlpath}")
+    
+    # É crucial gerar o checksum correto. Por enquanto, deixamos SKIP para o primeiro download.
+    # Depois de baixar, gere o checksum com 'updpkgsums' e substitua 'SKIP'.
+    sha256sums=('SKIP')
+    
+    # Baixa o arquivo
+    echo "==> Baixando o AppImage de: https://${_dlhost}${_dlpath}"
+    msg2 "Baixando fontes..."
+    download
+}
+
+build() {
+    cd "${srcdir}"
+    
+    echo "==> Iniciando extração do AppImage..."
+    echo "==> Arquivo baixado: ${_appimage}"
+    
+    # Torna o AppImage executável
     chmod +x "${_appimage}"
     
-    # Verify we have a valid AppImage
+    # Verifica se o arquivo baixado é um executável ELF (formato do AppImage)
     if ! file "${_appimage}" | grep -q "ELF"; then
-        echo "==> ERROR: Downloaded file is not a valid AppImage!"
-        echo "==> File type:"
+        echo "==> ERRO: O arquivo baixado não é um AppImage válido (não é um ELF)!"
+        echo "==> Tipo do arquivo:"
         file "${_appimage}"
-        echo "==> File size:"
+        echo "==> Tamanho do arquivo:"
         ls -lh "${_appimage}"
-        echo "==> First few bytes:"
-        head -c 100 "${_appimage}"
         return 1
     fi
     
-    # Extract AppImage contents
-    echo "==> Extracting AppImage contents"
-    if ! ./"${_appimage}" --appimage-extract >/dev/null 2>&1; then
-        echo "==> ERROR: Failed to extract AppImage"
+    # Extrai o conteúdo do AppImage. Removemos o redirecionamento para /dev/null
+    # para que possamos ver os erros de extração, se houver.
+    echo "==> Extraindo conteúdo do AppImage..."
+    if ! ./"${_appimage}" --appimage-extract; then
+        echo "==> ERRO: Falha ao extrair o AppImage."
         return 1
     fi
     
-    # Verify extraction
+    # Verifica se a extração foi bem-sucedida
     if [ ! -d "squashfs-root" ]; then
-        echo "==> ERROR: squashfs-root directory not created!"
+        echo "==> ERRO: O diretório squashfs-root não foi criado!"
         return 1
     fi
     
-    echo "==> Extraction successful"
-    ls -la squashfs-root/ | head -20
+    echo "==> Extração concluída com sucesso."
 }
 
 package() {
     cd "${srcdir}"
 
-    # Verify extraction was successful
+    # Verifica se a extração foi bem-sucedida antes de empacotar
     if [ ! -d "squashfs-root" ]; then
-        echo "==> ERROR: squashfs-root not found in package()"
+        echo "==> ERRO: Diretório squashfs-root não encontrado na função package()."
         return 1
     fi
 
-    # Create necessary directories
+    # Cria os diretórios necessários
     install -dm755 "${pkgdir}/opt/${_shortname}"
     install -dm755 "${pkgdir}/usr/bin"
     install -dm755 "${pkgdir}/usr/share/applications"
-    install -dm755 "${pkgdir}/usr/share/icons"
+    install -dm755 "${pkgdir}/usr/share/icons/hicolor"
     install -dm755 "${pkgdir}/usr/share/licenses/${pkgname}"
 
-    # Install AppImage to /opt
+    # Instala o AppImage em /opt
     install -Dm755 "${_appimage}" "${pkgdir}/opt/${_shortname}/${pkgname}.AppImage"
 
-    # Install Licenses from AppImage
-    if [ -f "squashfs-root/LICENSE.electron.txt" ]; then
-        install -Dm644 "squashfs-root/LICENSE.electron.txt" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.electron.txt"
-    fi
-    
-    if [ -f "squashfs-root/LICENSES.chromium.html" ]; then
-        install -Dm644 "squashfs-root/LICENSES.chromium.html" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSES.chromium.html"
-    fi
+    # Instala as licenças do AppImage
+    install -Dm644 "squashfs-root/LICENSE.electron.txt" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.electron.txt"
+    install -Dm644 "squashfs-root/LICENSES.chromium.html" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSES.chromium.html"
 
-    # Install desktop file
-    if [ -f "squashfs-root/pcloud.desktop" ]; then
-        # Update Exec line to use our wrapper script
-        sed -i 's|^Exec=.*|Exec=/usr/bin/pcloud|' "squashfs-root/pcloud.desktop"
-        install -Dm644 "squashfs-root/pcloud.desktop" "${pkgdir}/usr/share/applications/pcloud.desktop"
-    fi
+    # Instala o arquivo .desktop
+    sed -i 's|^Exec=.*|Exec=/usr/bin/pcloud|' "squashfs-root/pcloud.desktop"
+    install -Dm644 "squashfs-root/pcloud.desktop" "${pkgdir}/usr/share/applications/pcloud.desktop"
 
-    # Install main icon
-    if [ -f "squashfs-root/pcloud.png" ]; then
-        install -Dm644 "squashfs-root/pcloud.png" "${pkgdir}/usr/share/icons/pcloud.png"
-    fi
+    # Instala o ícone principal e os ícones hicolor
+    install -Dm644 "squashfs-root/pcloud.png" "${pkgdir}/usr/share/icons/pcloud.png"
+    cp -r squashfs-root/usr/share/icons/hicolor/* "${pkgdir}/usr/share/icons/hicolor/"
 
-    # Install hicolor icons
-    if [ -d "squashfs-root/usr/share/icons/hicolor" ]; then
-        cp -r squashfs-root/usr/share/icons/hicolor/* "${pkgdir}/usr/share/icons/hicolor/" 2>/dev/null || true
-    fi
-
-    # Create wrapper script
-    cat > "${pkgdir}/usr/bin/${_shortname}" << 'EOF'
+    # Cria um script wrapper para chamar o AppImage de /usr/bin
+    install -Dm755 /dev/stdin "${pkgdir}/usr/bin/${_shortname}" << 'EOF'
 #!/bin/bash
 exec /opt/pcloud/pcloud-drive.AppImage "$@"
 EOF
-    chmod +x "${pkgdir}/usr/bin/${_shortname}"
     
-    echo "==> Package installation completed successfully"
+    echo "==> Empacotamento concluído com sucesso."
 }
