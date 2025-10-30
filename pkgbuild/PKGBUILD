@@ -23,10 +23,23 @@ sha256sums=('SKIP')
 prepare() {
     echo "==> Starting AppImage extraction..."
     
-    # Rename downloaded file to proper AppImage name
+    # Handle the downloaded file (might be symlink or regular file)
+    local appimage_file=""
+    
     if [ -f "linux" ]; then
-        echo "==> Renaming linux to pcloud.AppImage"
-        mv linux pcloud.AppImage
+        echo "==> Found 'linux' file"
+        # Resolve symlink if it's one
+        appimage_file=$(readlink -f "linux")
+        echo "==> Resolved to: $appimage_file"
+        
+        # Copy it to a proper name if needed
+        if [ "$appimage_file" != "$(pwd)/pcloud.AppImage" ]; then
+            echo "==> Copying to pcloud.AppImage"
+            cp -f "$appimage_file" pcloud.AppImage
+        else
+            echo "==> Renaming linux to pcloud.AppImage"
+            mv linux pcloud.AppImage
+        fi
     else
         echo "==> ERROR: linux file not found!"
         ls -la
@@ -37,12 +50,17 @@ prepare() {
     echo "==> Making AppImage executable"
     chmod +x pcloud.AppImage
     
-    # Verify AppImage is valid
-    if ! file pcloud.AppImage | grep -q "ELF\|ISO"; then
-        echo "==> ERROR: Downloaded file is not a valid AppImage!"
-        file pcloud.AppImage
+    # Verify AppImage exists and is regular file
+    if [ ! -f "pcloud.AppImage" ] || [ -L "pcloud.AppImage" ]; then
+        echo "==> ERROR: pcloud.AppImage is not a regular file!"
+        file pcloud.AppImage || true
+        ls -la pcloud.AppImage || true
         return 1
     fi
+    
+    echo "==> pcloud.AppImage info:"
+    file pcloud.AppImage
+    ls -lh pcloud.AppImage
     
     # Extract AppImage contents
     echo "==> Extracting AppImage contents"
@@ -53,14 +71,21 @@ prepare() {
         # Alternative: try using unsquashfs if available
         if command -v unsquashfs &> /dev/null; then
             echo "==> Using unsquashfs for extraction"
-            # AppImage is essentially a squashfs filesystem, try mounting/extracting
             unsquashfs -d squashfs-root pcloud.AppImage || {
                 echo "==> ERROR: unsquashfs also failed"
                 return 1
             }
         else
-            echo "==> ERROR: unsquashfs not available"
-            return 1
+            echo "==> ERROR: unsquashfs not available, trying 7z..."
+            if command -v 7z &> /dev/null; then
+                7z x -osquashfs-root pcloud.AppImage || {
+                    echo "==> ERROR: 7z also failed"
+                    return 1
+                }
+            else
+                echo "==> ERROR: No extraction tools available"
+                return 1
+            fi
         fi
     fi
     
