@@ -11,7 +11,7 @@ url='https://www.pcloud.com/'
 license=("LicenseRef-${pkgname}")
 depends=('fuse2' 'zlib' 'hicolor-icon-theme')
 optdepends=('libappindicator-gtk3: tray menu support')
-makedepends=('curl' 'jq')
+makedepends=('curl' 'jq' 'squashfs-tools')
 options=('!strip' '!debug')
 install="pkgbuild.install"
 replaces=('pcloud-git' 'pcloud')
@@ -48,9 +48,34 @@ prepare() {
 
   chmod +x "${_appimage}"
 
-  echo "==> Extracting AppImage..."
-  ./"${_appimage}" --appimage-extract -n || {
-    echo "ERROR: failed to extract the AppImage"; exit 1; }
+  echo "==> Extracting AppImage SquashFS payload..."
+  local squash_tmp
+  squash_tmp="$(mktemp "${srcdir}/appimage.XXXXXX.squashfs")"
+
+  python - <<'PY' "${_appimage}" "${squash_tmp}"
+import pathlib
+import shutil
+import sys
+
+source = pathlib.Path(sys.argv[1])
+target = pathlib.Path(sys.argv[2])
+
+with source.open('rb') as fh:
+    data = fh.read()
+
+offset = data.rfind(b'hsqs')
+if offset == -1:
+    raise SystemExit("ERROR: SquashFS magic 'hsqs' not found inside AppImage")
+
+with source.open('rb') as fh, target.open('wb') as out:
+    fh.seek(offset)
+    shutil.copyfileobj(fh, out)
+PY
+
+  rm -rf "${srcdir}/squashfs-root"
+  unsquashfs -d "${srcdir}/squashfs-root" -f "${squash_tmp}" >/dev/null || {
+    echo "ERROR: failed to unpack SquashFS payload"; exit 1; }
+  rm -f "${squash_tmp}"
 
   [[ -d "${srcdir}/squashfs-root" ]] || {
     echo "ERROR: squashfs-root directory not found after extraction"; exit 1; }
