@@ -5,78 +5,120 @@
 pkgname=pcloud-drive
 pkgver=1.14.17
 pkgrel=1
-pkgdesc='pCloud drive. Electron edition.'
+pkgdesc='pCloud Drive (Electron edition).'
 arch=('x86_64')
 url='https://www.pcloud.com/'
 license=("LicenseRef-${pkgname}")
-# Adicionado 'jq' como dependência de compilação para analisar a resposta da API de forma segura
-makedepends=('jq')
 depends=('fuse2' 'zlib' 'hicolor-icon-theme')
-optdepends=('libappindicator-gtk3: Tray menu support')
-options=(!strip !debug)
-# Usando a convenção padrão do BigLinux
+optdepends=('libappindicator-gtk3: tray menu support')
+makedepends=('curl' 'jq')
+options=('!strip' '!debug')
 install="pkgbuild.install"
 replaces=('pcloud-git' 'pcloud')
 
 _shortname='pcloud'
 _appimage="${pkgname}-${pkgver}.AppImage"
-
-# GERAÇÃO URL DINÂMICA
 _api_code='XZbJvD5ZfXtwygX5xg7F9ywtRup5H5sBvfhy'
-echo "==> Obtendo URL de download da API do pCloud..."
-_api_response="$(curl -s "https://api.pcloud.com/getpublinkdownload?code=${_api_code}")"
 
-# Usa jq para extrair o host e o caminho de forma segura
-_dlhost=$(echo "${_api_response}" | jq -r '.hosts[0]')
-_dlpath=$(echo "${_api_response}" | jq -r '.path')
+source=()
+sha256sums=()
 
-# Verifica se a extração da URL foi bem-sucedida
-if [[ -z "${_dlhost}" || -z "${_dlpath}" ]]; then
-  # A função error() é do makepkg e encerra o build de forma limpa
-  error "Falha ao obter a URL de download da API do pCloud. Resposta recebida: ${_api_response}"
-fi
-# --- FIM DA GERAÇÃO DE URL ---
+prepare() {
+  cd "${srcdir}"
 
-#SOURCE OBTIDA
-source=("${_appimage}::https://${_dlhost}${_dlpath}")
-sha256sums=('SKIP')
+  echo "==> Fetching download URL from the pCloud API..."
+  local api_url="https://api.pcloud.com/getpublinkdownload?code=${_api_code}"
+  local api_resp
+  api_resp="$(curl -fsSL "${api_url}")" || {
+    echo "ERROR: request to the pCloud API failed"; exit 1; }
 
+  local dlhost dlpath
+  dlhost="$(printf '%s' "$api_resp" | jq -r '.hosts[0]')" || true
+  dlpath="$(printf '%s' "$api_resp" | jq -r '.path')" || true
+
+  if [[ -z "${dlhost}" || -z "${dlpath}" || "${dlhost}" == "null" || "${dlpath}" == "null" ]]; then
+    echo "ERROR: unable to extract host/path. Response: ${api_resp}"
+    exit 1
+  fi
+
+  local url_download="https://${dlhost}${dlpath}"
+  echo "==> Downloading AppImage: ${url_download}"
+  curl -fL --output "${_appimage}" "${url_download}" || {
+    echo "ERROR: failed to download the AppImage"; exit 1; }
+
+  chmod +x "${_appimage}"
+
+  echo "==> Extracting AppImage..."
+  ./"${_appimage}" --appimage-extract -n || {
+    echo "ERROR: failed to extract the AppImage"; exit 1; }
+
+  [[ -d "${srcdir}/squashfs-root" ]] || {
+    echo "ERROR: squashfs-root directory not found after extraction"; exit 1; }
+}
 package() {
-    cd "${srcdir}"
+  cd "${srcdir}"
 
-    # Verifica se a extração foi bem-sucedida antes de empacotar
-    if [ ! -d "squashfs-root" ]; then
-        error "Diretório squashfs-root não encontrado na função package()."
-        return 1
-    fi
+  [[ -d "squashfs-root" ]] || {
+    echo "ERROR: squashfs-root directory not found inside package()"; exit 1; }
 
-    # Cria os diretórios necessários
-    install -dm755 "${pkgdir}/opt/${_shortname}"
-    install -dm755 "${pkgdir}/usr/bin"
-    install -dm755 "${pkgdir}/usr/share/applications"
-    install -dm755 "${pkgdir}/usr/share/icons/hicolor"
-    install -dm755 "${pkgdir}/usr/share/licenses/${pkgname}"
+  install -dm755 "${pkgdir}/opt/${_shortname}"
+  install -dm755 "${pkgdir}/usr/bin"
+  install -dm755 "${pkgdir}/usr/share/applications"
+  install -dm755 "${pkgdir}/usr/share/icons/hicolor"
+  install -dm755 "${pkgdir}/usr/share/licenses/${pkgname}"
 
-    # Instala o AppImage em /opt
-    install -Dm755 "${_appimage}" "${pkgdir}/opt/${_shortname}/${pkgname}.AppImage"
+  # AppImage under /opt
+  install -Dm755 "${_appimage}" "${pkgdir}/opt/${_shortname}/${pkgname}.AppImage"
 
-    # Instala as licenças do AppImage
-    install -Dm644 "squashfs-root/LICENSE.electron.txt" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.electron.txt"
-    install -Dm644 "squashfs-root/LICENSES.chromium.html" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSES.chromium.html"
+  # Licenses (if present)
+  [[ -f "squashfs-root/LICENSE.electron.txt" ]] && \
+    install -Dm644 "squashfs-root/LICENSE.electron.txt" \
+      "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.electron.txt"
+  [[ -f "squashfs-root/LICENSES.chromium.html" ]] && \
+    install -Dm644 "squashfs-root/LICENSES.chromium.html" \
+      "${pkgdir}/usr/share/licenses/${pkgname}/LICENSES.chromium.html"
 
-    # Instala o arquivo .desktop
-    sed -i 's|^Exec=.*|Exec=/usr/bin/pcloud|' "squashfs-root/pcloud.desktop"
-    install -Dm644 "squashfs-root/pcloud.desktop" "${pkgdir}/usr/share/applications/pcloud.desktop"
+  # Normalize permissions from the extracted tree (sometimes comes as 0700)
+  find squashfs-root -type d -exec chmod 0755 {} \;
+  find squashfs-root -type f -exec chmod 0644 {} \; 2>/dev/null || true
 
-    # Instala o ícone principal e os ícones hicolor
-    install -Dm644 "squashfs-root/pcloud.png" "${pkgdir}/usr/share/icons/pcloud.png"
-    cp -r squashfs-root/usr/share/icons/hicolor/* "${pkgdir}/usr/share/icons/hicolor/"
+  # ---- ICONS: look for the hicolor theme inside the AppImage and copy everything ----
+  local icon_tree
+  icon_tree="$(find "squashfs-root" -type d -path '*/icons/hicolor' -print -quit)"
+  if [[ -n "${icon_tree}" ]]; then
+    # the "/." forces copying the full contents while keeping structure
+    cp -a "${icon_tree}/." "${pkgdir}/usr/share/icons/hicolor/"
+  else
+    echo "WARNING: hicolor theme not found inside the AppImage."
+  fi
 
-    # Cria um script wrapper para chamar o AppImage de /usr/bin
-    install -Dm755 /dev/stdin "${pkgdir}/usr/bin/${_shortname}" << 'EOF'
+  # Optional root icon kept at /usr/share/icons/pcloud.png
+  if [[ -f "squashfs-root/pcloud.png" ]]; then
+    install -Dm644 "squashfs-root/pcloud.png" \
+      "${pkgdir}/usr/share/icons/pcloud.png"
+  fi
+
+  # ---- DESKTOP: locate the .desktop file inside the AppImage ----
+  local desktop_file
+  desktop_file="$(find "squashfs-root" -type f -name 'pcloud.desktop' -print -quit)"
+  if [[ -n "${desktop_file}" ]]; then
+    local desktop_target="${pkgdir}/usr/share/applications/pcloud.desktop"
+    install -Dm644 "${desktop_file}" "${desktop_target}"
+
+    # Adapt Exec to use our wrapper and disable automatic integration
+    sed -i -E "s|^Exec=.*|Exec=env DESKTOPINTEGRATION=false /usr/bin/${_shortname}|" \
+      "${desktop_target}"
+    # Normalize the Name if it ships as "pcloud"
+    sed -i "s/^Name=pcloud$/Name=pCloud/" "${desktop_target}"
+  else
+    echo "WARNING: pcloud.desktop not found in the extracted AppImage."
+  fi
+
+  # Wrapper in /usr/bin
+  install -Dm755 /dev/stdin "${pkgdir}/usr/bin/${_shortname}" << 'EOF'
 #!/bin/bash
 exec /opt/pcloud/pcloud-drive.AppImage "$@"
 EOF
-    
-    echo "==> Empacotamento concluído com sucesso."
+
+  echo "==> Packaging completed."
 }
