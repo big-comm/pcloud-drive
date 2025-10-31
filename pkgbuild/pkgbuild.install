@@ -69,9 +69,10 @@ pre_remove() {
 
 printMsg "Preparing to remove the package..."
 
-# Stop any running pcloud processes gracefully
+# Stop any running pCloud processes without terminating pacman itself
 
-pkill -f pcloud 2>/dev/null || true
+pkill -x pcloud 2>/dev/null || true
+pkill -f '/opt/pcloud/pcloud-drive.AppImage' 2>/dev/null || true
 
 printMsg "Stopped running pCloud processes"
 
@@ -101,4 +102,3 @@ fi
 printMsg "Package cleanup completed"
 
 }
-
